@@ -46,6 +46,7 @@ import com.google.ar.core.Plane;
 import com.google.ar.core.Point;
 import com.google.ar.core.Point.OrientationMode;
 import com.google.ar.core.PointCloud;
+import com.google.ar.core.Pose;
 import com.google.ar.core.Session;
 import com.google.ar.core.Trackable;
 import com.google.ar.core.TrackingFailureReason;
@@ -87,6 +88,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.stream.Collector;
 
@@ -185,6 +187,9 @@ public class HelloArActivity extends AppCompatActivity implements SampleRender.R
   private final float[] worldLightDirection = {0.0f, 0.0f, 0.0f, 0.0f};
   private final float[] viewLightDirection = new float[4]; // view x world light direction
 
+  // Model ID qui sera envoyé au serveur
+  private int model_id;
+
   @Override
   protected void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
@@ -203,6 +208,9 @@ public class HelloArActivity extends AppCompatActivity implements SampleRender.R
 
     depthSettings.onCreate(this);
     instantPlacementSettings.onCreate(this);
+
+    //Initialisation à 0 du model_id
+    model_id = 0;
 
     ImageButton settingsButton = findViewById(R.id.settings_button);
     settingsButton.setOnClickListener(
@@ -224,8 +232,9 @@ public class HelloArActivity extends AppCompatActivity implements SampleRender.R
                 Collection<Plane> allPlanes = getCollectionOfAllPlanes();
                 String message = COLLECTION_PLANE_MESSAGE;
                 messageSnackbarHelper.showMessage(HelloArActivity.this, message);
+                model_id++;
                 fromPlanesToJSON(allPlanes);
-                writeToFile();
+                //writeToFile();
               }
             });
   }
@@ -236,11 +245,85 @@ public class HelloArActivity extends AppCompatActivity implements SampleRender.R
   }
 
   protected void fromPlanesToJSON (Collection<Plane> p) {
-    int l = p.toArray().length;
-    Plane[] planeArray = (Plane[]) p.toArray();
-    for (int i = 0; i < l; i++){
-      float x = planeArray[i].getExtentX();
+
+    //construction de l'en-tête du json
+    String model_id_str = String.valueOf(model_id);
+    String json = "{" + "\"model\": " + model_id_str + "," + "\"Planes\":[";
+
+    float x = 0;
+    float z = 0;
+    Pose c = null;
+    float[] coord;
+    int i = 0;
+
+    //ID du plan traité (0 avant de parcourir les plans)
+    int idP = 0;
+    //ID des points
+    int idp = 1;
+
+    //Pour chaque plan
+    for(Plane plan_i : p){
+      idP++;
+      //On recupère les coordonnées relatives, qui seront transformées grâce à la Pose du plan, pour obtenir les coordonnées absolues
+      coord = plan_i.getCenterPose().transformPoint(plan_i.getPolygon().array());
+      if (idP == 1)
+        json = json + "{\"idP\":" + String.valueOf(idP) + ",\"Points\":[";
+      else
+        json = json + ",{\n\"idP\": " + String.valueOf(idP) + ",\n\"Points\": [";
+
+      //ici récupération du premier point
+      json = json + "{\"idp\": " + idp + ",";
+      idp++;
+        //vx
+        json = json + "\"vx\":" + "vx" + ",";
+        //vy
+        json = json + "\"vy\":" + "vy" + ",";
+        //vz
+        json = json + "\"vz\":" + "vz" + ",";
+        // le reste qui de tout façon est à zero
+        json = json + "\"vnx\":0,\"vny\":0,\"vnz\":0},";
+
+      //ici récupération du deuxième point
+      json = json + "{\"idp\": " + idp + ",";
+      idp++;
+        //vx
+        json = json + "\"vx\":" + "vx" + ",";
+        //vy
+        json = json + "\"vy\":" + "vy" + ",";
+        //vz
+        json = json + "\"vz\":" + "vz" + ",";
+        // le reste qui de tout façon est à zero
+        json = json + "\"vnx\":0,\"vny\":0,\"vnz\":0},";
+
+      //ici récupération du troisième point
+      json = json + "{\"idp\":" + idp + ",";
+      idp++;
+        //vx
+        json = json + "\"vx\":" + "vx" + ",";
+        //vy
+        json = json + "\"vy\":" + "vy" + ",";
+        //vz
+        json = json + "\"vz\":" + "vz" + ",";
+        // le reste qui de tout façon est à zero
+        json = json + "\"vnx\":0,\"vny\":0,\"vnz\":0},";
+
+      //ici récupération du quatrième point
+      json = json + "{\"idp\": " + idp + ",";
+      idp++;
+        //vx
+        json = json + "\"vx\":" + "vx" + ",";
+        //vy
+        json = json + "\"vx\":" + "vx" + ",";
+        //vz
+        json = json + "\"vz\":" + "vz" + ",";
+        // le reste qui de tout façon est à zero
+        json = json + "\"vnx\":0,\"vny\": 0,\"vnz\": 0}]}";
+
+      i++;
     }
+
+    json = json + "]}";
+
   }
 
   protected void writeToFile() {
