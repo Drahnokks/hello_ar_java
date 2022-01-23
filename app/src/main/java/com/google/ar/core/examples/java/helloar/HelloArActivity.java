@@ -250,10 +250,9 @@ public class HelloArActivity extends AppCompatActivity implements SampleRender.R
     String model_id_str = String.valueOf(model_id);
     String json = "{" + "\"model\": " + model_id_str + "," + "\"Planes\":[";
 
-    float x = 0;
-    float z = 0;
     Pose c = null;
-    float[] coord;
+    float[] coord = null;
+    float[] poly = null;
     int i = 0;
 
     //ID du plan traité (0 avant de parcourir les plans)
@@ -264,12 +263,13 @@ public class HelloArActivity extends AppCompatActivity implements SampleRender.R
     //Pour chaque plan
     for(Plane plan_i : p){
       idP++;
+      poly = plan_i.getPolygon().array();
       //On recupère les coordonnées relatives, qui seront transformées grâce à la Pose du plan, pour obtenir les coordonnées absolues
-      coord = plan_i.getCenterPose().transformPoint(plan_i.getPolygon().array());
+      coord = plan_i.getCenterPose().transformPoint(poly);
       if (idP == 1)
         json = json + "{\"idP\":" + String.valueOf(idP) + ",\"Points\":[";
       else
-        json = json + ",{\n\"idP\": " + String.valueOf(idP) + ",\n\"Points\": [";
+        json = json + ",{\"idP\": " + String.valueOf(idP) + ",\"Points\": [";
 
       //ici récupération du premier point
       json = json + "{\"idp\": " + idp + ",";
