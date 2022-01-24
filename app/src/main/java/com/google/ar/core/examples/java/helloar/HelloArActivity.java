@@ -16,35 +16,28 @@
 
 package com.google.ar.core.examples.java.helloar;
 
-import android.content.DialogInterface;
-import android.content.res.Resources;
 import android.media.Image;
 import android.opengl.GLES30;
 import android.opengl.GLSurfaceView;
 import android.opengl.Matrix;
 import android.os.Bundle;
 import android.util.Log;
-import android.view.MenuItem;
-import android.view.MotionEvent;
+
 import android.view.View;
 import android.widget.ImageButton;
-import android.widget.PopupMenu;
+
 import android.widget.Toast;
-import androidx.appcompat.app.AlertDialog;
+
 import androidx.appcompat.app.AppCompatActivity;
 import com.google.ar.core.Anchor;
 import com.google.ar.core.ArCoreApk;
 import com.google.ar.core.Camera;
 import com.google.ar.core.Config;
 import com.google.ar.core.Config.InstantPlacementMode;
-import com.google.ar.core.DepthPoint;
 import com.google.ar.core.Frame;
-import com.google.ar.core.HitResult;
 import com.google.ar.core.InstantPlacementPoint;
 import com.google.ar.core.LightEstimate;
 import com.google.ar.core.Plane;
-import com.google.ar.core.Point;
-import com.google.ar.core.Point.OrientationMode;
 import com.google.ar.core.PointCloud;
 import com.google.ar.core.Pose;
 import com.google.ar.core.Session;
@@ -77,33 +70,30 @@ import com.google.ar.core.exceptions.UnavailableDeviceNotCompatibleException;
 import com.google.ar.core.exceptions.UnavailableSdkTooOldException;
 import com.google.ar.core.exceptions.UnavailableUserDeclinedInstallationException;
 
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStreamWriter;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
-import java.util.stream.Collector;
+
 
 /**
  * This is a simple example that shows how to create an augmented reality (AR) application using the
- * ARCore API. The application will display any detected planes and will allow the user to tap on a
- * plane to place a 3D model.
+ * ARCore API. The application will display any detected planes.
  */
 public class HelloArActivity extends AppCompatActivity implements SampleRender.Renderer {
 
   private static final String TAG = HelloArActivity.class.getSimpleName();
 
-  private static final String SEARCHING_PLANE_MESSAGE = "Searching for surfaces...";
-  private static final String WAITING_FOR_TAP_MESSAGE = "Tap on a surface to place an object.";
-  private static final String COLLECTION_PLANE_MESSAGE = "All existing planes collected.";
+  private static final String SEARCHING_PLANE_MESSAGE = "Recherche de surfaces...";
+  private static final String WAITING_FOR_TAP_MESSAGE = "Appuyer sur l'enveloppe pour envoyer les données.";
+  private static final String COLLECTION_PLANE_MESSAGE = "Tous les plans existant ont été collecté.";
 
   // See the definition of updateSphericalHarmonicsCoefficients for an explanation of these
   // constants.
@@ -143,10 +133,8 @@ public class HelloArActivity extends AppCompatActivity implements SampleRender.R
   private boolean hasSetTextureNames = false;
 
   private final DepthSettings depthSettings = new DepthSettings();
-  private boolean[] depthSettingsMenuDialogCheckboxes = new boolean[2];
-
   private final InstantPlacementSettings instantPlacementSettings = new InstantPlacementSettings();
-  private boolean[] instantPlacementSettingsMenuDialogCheckboxes = new boolean[1];
+
   // Assumed distance from the device camera to the surface on which user will try to place objects.
   // This value affects the apparent scale of objects while the tracking method of the
   // Instant Placement point is SCREENSPACE_WITH_APPROXIMATE_DISTANCE.
@@ -206,23 +194,9 @@ public class HelloArActivity extends AppCompatActivity implements SampleRender.R
 
     installRequested = false;
 
-    depthSettings.onCreate(this);
-    instantPlacementSettings.onCreate(this);
-
     //Initialisation à 0 du model_id
     model_id = 0;
 
-    ImageButton settingsButton = findViewById(R.id.settings_button);
-    settingsButton.setOnClickListener(
-        new View.OnClickListener() {
-          @Override
-          public void onClick(View v) {
-            PopupMenu popup = new PopupMenu(HelloArActivity.this, v);
-            popup.setOnMenuItemClickListener(HelloArActivity.this::settingsMenuClick);
-            popup.inflate(R.menu.settings_menu);
-            popup.show();
-          }
-        });
 
     ImageButton sendButton = findViewById(R.id.send_button);
     sendButton.setOnClickListener(
@@ -230,11 +204,14 @@ public class HelloArActivity extends AppCompatActivity implements SampleRender.R
               @Override
               public void onClick(View v) {
                 Collection<Plane> allPlanes = getCollectionOfAllPlanes();
-                String message = COLLECTION_PLANE_MESSAGE;
-                messageSnackbarHelper.showMessage(HelloArActivity.this, message);
+                messageSnackbarHelper.showMessage(HelloArActivity.this,
+                        COLLECTION_PLANE_MESSAGE);
                 model_id++;
-                fromPlanesToJSON(allPlanes);
-                //writeToFile();
+                try {
+                  fromPlanesToJSON(allPlanes);
+                } catch (IOException e) {
+                  e.printStackTrace();
+                }
               }
             });
   }
@@ -244,121 +221,109 @@ public class HelloArActivity extends AppCompatActivity implements SampleRender.R
     return allPlanes;
   }
 
-  protected void fromPlanesToJSON (Collection<Plane> p) {
+  protected void fromPlanesToJSON (Collection<Plane> p) throws IOException {
 
     //construction de l'en-tête du json
     String model_id_str = String.valueOf(model_id);
     String json = "{" + "\"model\": " + model_id_str + "," + "\"Planes\":[";
 
-    Pose c = null;
-    float[] coord = null;
-    float[] poly = null;
-    int i = 0;
-
+    Pose centerPose = null;
     //ID du plan traité (0 avant de parcourir les plans)
     int idP = 0;
     //ID des points
     int idp = 1;
 
+    float[] point1 = new float[3];
+    float[] point2 = new float[3];
+    float[] point3 = new float[3];
+    float[] point4 = new float[3];
+
     //Pour chaque plan
     for(Plane plan_i : p){
+
       idP++;
-      poly = plan_i.getPolygon().array();
-      //On recupère les coordonnées relatives, qui seront transformées grâce à la Pose du plan, pour obtenir les coordonnées absolues
-      coord = plan_i.getCenterPose().transformPoint(poly);
+      centerPose = plan_i.getCenterPose();
+      point1 = centerPose.transformPoint(new float[]{(plan_i.getExtentX())/2, 0, (plan_i.getExtentZ())/2});
+      point2 = centerPose.transformPoint(new float[]{(plan_i.getExtentX())/2, 0, -(plan_i.getExtentZ())/2});
+      point3 = centerPose.transformPoint(new float[]{-(plan_i.getExtentX())/2, 0, (plan_i.getExtentZ())/2});
+      point4 = centerPose.transformPoint(new float[]{-(plan_i.getExtentX())/2, 0, -(plan_i.getExtentZ())/2});
+
       if (idP == 1)
         json = json + "{\"idP\":" + String.valueOf(idP) + ",\"Points\":[";
       else
         json = json + ",{\"idP\": " + String.valueOf(idP) + ",\"Points\": [";
 
       //ici récupération du premier point
-      json = json + "{\"idp\": " + idp + ",";
+      json = json + "{\"idp\":" + idp + ",";
       idp++;
-        //vx
-        json = json + "\"vx\":" + "vx" + ",";
-        //vy
-        json = json + "\"vy\":" + "vy" + ",";
-        //vz
-        json = json + "\"vz\":" + "vz" + ",";
+        //vx, vy, vz
+        json = json + "\"vx\":" + String.valueOf(point1[0]) + ",";
+        json = json + "\"vy\":" + String.valueOf(point1[1]) + ",";
+        json = json + "\"vz\":" + String.valueOf(point1[2]) + ",";
         // le reste qui de tout façon est à zero
         json = json + "\"vnx\":0,\"vny\":0,\"vnz\":0},";
 
       //ici récupération du deuxième point
-      json = json + "{\"idp\": " + idp + ",";
+      json = json + "{\"idp\":" + idp + ",";
       idp++;
-        //vx
-        json = json + "\"vx\":" + "vx" + ",";
-        //vy
-        json = json + "\"vy\":" + "vy" + ",";
-        //vz
-        json = json + "\"vz\":" + "vz" + ",";
+        //vx, vy, vz
+        json = json + "\"vx\":" + String.valueOf(point2[0]) + ",";
+        json = json + "\"vy\":" + String.valueOf(point2[1]) + ",";
+        json = json + "\"vz\":" + String.valueOf(point2[2]) + ",";
         // le reste qui de tout façon est à zero
         json = json + "\"vnx\":0,\"vny\":0,\"vnz\":0},";
 
       //ici récupération du troisième point
       json = json + "{\"idp\":" + idp + ",";
       idp++;
-        //vx
-        json = json + "\"vx\":" + "vx" + ",";
-        //vy
-        json = json + "\"vy\":" + "vy" + ",";
-        //vz
-        json = json + "\"vz\":" + "vz" + ",";
+        //vx, vy, vz
+        json = json + "\"vx\":" + String.valueOf(point3[0]) + ",";
+        json = json + "\"vy\":" + String.valueOf(point3[1]) + ",";
+        json = json + "\"vz\":" + String.valueOf(point3[2]) + ",";
         // le reste qui de tout façon est à zero
         json = json + "\"vnx\":0,\"vny\":0,\"vnz\":0},";
 
       //ici récupération du quatrième point
-      json = json + "{\"idp\": " + idp + ",";
+      json = json + "{\"idp\":" + idp + ",";
       idp++;
-        //vx
-        json = json + "\"vx\":" + "vx" + ",";
-        //vy
-        json = json + "\"vx\":" + "vx" + ",";
-        //vz
-        json = json + "\"vz\":" + "vz" + ",";
+        //vx, vy, vz
+        json = json + "\"vx\":" + String.valueOf(point4[0]) + ",";
+        json = json + "\"vy\":" + String.valueOf(point4[1]) + ",";
+        json = json + "\"vz\":" + String.valueOf(point4[2]) + ",";
         // le reste qui de tout façon est à zero
-        json = json + "\"vnx\":0,\"vny\": 0,\"vnz\": 0}]}";
-
-      i++;
+        json = json + "\"vnx\":0,\"vny\":0,\"vnz\":0}]}";
     }
-
     json = json + "]}";
-
+    sendToServer(json);
   }
 
-  protected void writeToFile() {
-    FileOutputStream fos = null;
-    try {
-      fos = openFileOutput("test.txt", MODE_PRIVATE);
-      fos.write("test".getBytes());
-      Toast.makeText(this, "saved to " + getFilesDir() + "/" + "test.txt", Toast.LENGTH_LONG);
-    }
-    catch (FileNotFoundException e) {
-      e.printStackTrace();
-    } catch (IOException e) {
-      e.printStackTrace();
-    } finally {
-      if (fos != null) {
-        try {
-          fos.close();
-        } catch (IOException e) {
-          e.printStackTrace();
-        }
-      }
+  protected void sendToServer(String s) throws IOException {
+    URL url = new URL ("http://ip:port/api/v1/parsePlanes");
+    HttpURLConnection con = (HttpURLConnection)url.openConnection();
+    con.setRequestMethod("POST");
+    con.setRequestProperty("Content-Type", "application/string; utf-8");
+    con.setDoOutput(true);
+
+    try(OutputStream os = con.getOutputStream()) {
+      byte[] input = s.getBytes(StandardCharsets.UTF_8);
+      os.write(input, 0, input.length);
+      generateModel();
     }
   }
 
-  /** Menu button to launch feature specific settings. */
-  protected boolean settingsMenuClick(MenuItem item) {
-    if (item.getItemId() == R.id.depth_settings) {
-      launchDepthSettingsMenuDialog();
-      return true;
-    } else if (item.getItemId() == R.id.instant_placement_settings) {
-      launchInstantPlacementSettingsMenuDialog();
-      return true;
+  protected void generateModel()  throws IOException {
+    URL url = new URL ("http://ip:port/api/v1/createModel");
+    HttpURLConnection con = (HttpURLConnection)url.openConnection();
+    con.setRequestMethod("POST");
+    con.setRequestProperty("Content-Type", "application/string; utf-8");
+    con.setDoOutput(true);
+
+    try(OutputStream os = con.getOutputStream()) {
+      byte[] input = String.valueOf(model_id).getBytes(StandardCharsets.UTF_8);
+      os.write(input, 0, input.length);
     }
-    return false;
   }
+
 
   @Override
   protected void onDestroy() {
@@ -646,7 +611,7 @@ public class HelloArActivity extends AppCompatActivity implements SampleRender.R
     }
 
     // Handle one tap per frame.
-    handleTap(frame, camera);
+    //handleTap(frame, camera);
 
     // Keep the screen unlocked while tracking, but allow it to lock when tracking stops.
     trackingStateHelper.updateKeepScreenOnFlag(camera.getTrackingState());
@@ -753,148 +718,6 @@ public class HelloArActivity extends AppCompatActivity implements SampleRender.R
 
     // Compose the virtual scene with the background.
     backgroundRenderer.drawVirtualScene(render, virtualSceneFramebuffer, Z_NEAR, Z_FAR);
-  }
-
-  // Handle only one tap per frame, as taps are usually low frequency compared to frame rate.
-  private void handleTap(Frame frame, Camera camera) {
-    MotionEvent tap = tapHelper.poll();
-    if (tap != null && camera.getTrackingState() == TrackingState.TRACKING) {
-      List<HitResult> hitResultList;
-      if (instantPlacementSettings.isInstantPlacementEnabled()) {
-        hitResultList =
-            frame.hitTestInstantPlacement(tap.getX(), tap.getY(), APPROXIMATE_DISTANCE_METERS);
-      } else {
-        hitResultList = frame.hitTest(tap);
-      }
-      for (HitResult hit : hitResultList) {
-        // If any plane, Oriented Point, or Instant Placement Point was hit, create an anchor.
-        Trackable trackable = hit.getTrackable();
-        // If a plane was hit, check that it was hit inside the plane polygon.
-        // DepthPoints are only returned if Config.DepthMode is set to AUTOMATIC.
-        if ((trackable instanceof Plane
-                && ((Plane) trackable).isPoseInPolygon(hit.getHitPose())
-                && (PlaneRenderer.calculateDistanceToPlane(hit.getHitPose(), camera.getPose()) > 0))
-            || (trackable instanceof Point
-                && ((Point) trackable).getOrientationMode()
-                    == OrientationMode.ESTIMATED_SURFACE_NORMAL)
-            || (trackable instanceof InstantPlacementPoint)
-            || (trackable instanceof DepthPoint)) {
-          // Cap the number of objects created. This avoids overloading both the
-          // rendering system and ARCore.
-          if (wrappedAnchors.size() >= 20) {
-            wrappedAnchors.get(0).getAnchor().detach();
-            wrappedAnchors.remove(0);
-          }
-
-          // Adding an Anchor tells ARCore that it should track this position in
-          // space. This anchor is created on the Plane to place the 3D model
-          // in the correct position relative both to the world and to the plane.
-          wrappedAnchors.add(new WrappedAnchor(hit.createAnchor(), trackable));
-          // For devices that support the Depth API, shows a dialog to suggest enabling
-          // depth-based occlusion. This dialog needs to be spawned on the UI thread.
-          this.runOnUiThread(this::showOcclusionDialogIfNeeded);
-
-          // Hits are sorted by depth. Consider only closest hit on a plane, Oriented Point, or
-          // Instant Placement Point.
-          break;
-        }
-      }
-    }
-  }
-
-  /**
-   * Shows a pop-up dialog on the first call, determining whether the user wants to enable
-   * depth-based occlusion. The result of this dialog can be retrieved with useDepthForOcclusion().
-   */
-  private void showOcclusionDialogIfNeeded() {
-    boolean isDepthSupported = session.isDepthModeSupported(Config.DepthMode.AUTOMATIC);
-    if (!depthSettings.shouldShowDepthEnableDialog() || !isDepthSupported) {
-      return; // Don't need to show dialog.
-    }
-
-    // Asks the user whether they want to use depth-based occlusion.
-    new AlertDialog.Builder(this)
-        .setTitle(R.string.options_title_with_depth)
-        .setMessage(R.string.depth_use_explanation)
-        .setPositiveButton(
-            R.string.button_text_enable_depth,
-            (DialogInterface dialog, int which) -> {
-              depthSettings.setUseDepthForOcclusion(true);
-            })
-        .setNegativeButton(
-            R.string.button_text_disable_depth,
-            (DialogInterface dialog, int which) -> {
-              depthSettings.setUseDepthForOcclusion(false);
-            })
-        .show();
-  }
-
-  private void launchInstantPlacementSettingsMenuDialog() {
-    resetSettingsMenuDialogCheckboxes();
-    Resources resources = getResources();
-    new AlertDialog.Builder(this)
-        .setTitle(R.string.options_title_instant_placement)
-        .setMultiChoiceItems(
-            resources.getStringArray(R.array.instant_placement_options_array),
-            instantPlacementSettingsMenuDialogCheckboxes,
-            (DialogInterface dialog, int which, boolean isChecked) ->
-                instantPlacementSettingsMenuDialogCheckboxes[which] = isChecked)
-        .setPositiveButton(
-            R.string.done,
-            (DialogInterface dialogInterface, int which) -> applySettingsMenuDialogCheckboxes())
-        .setNegativeButton(
-            android.R.string.cancel,
-            (DialogInterface dialog, int which) -> resetSettingsMenuDialogCheckboxes())
-        .show();
-  }
-
-  /** Shows checkboxes to the user to facilitate toggling of depth-based effects. */
-  private void launchDepthSettingsMenuDialog() {
-    // Retrieves the current settings to show in the checkboxes.
-    resetSettingsMenuDialogCheckboxes();
-
-    // Shows the dialog to the user.
-    Resources resources = getResources();
-    if (session.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
-      // With depth support, the user can select visualization options.
-      new AlertDialog.Builder(this)
-          .setTitle(R.string.options_title_with_depth)
-          .setMultiChoiceItems(
-              resources.getStringArray(R.array.depth_options_array),
-              depthSettingsMenuDialogCheckboxes,
-              (DialogInterface dialog, int which, boolean isChecked) ->
-                  depthSettingsMenuDialogCheckboxes[which] = isChecked)
-          .setPositiveButton(
-              R.string.done,
-              (DialogInterface dialogInterface, int which) -> applySettingsMenuDialogCheckboxes())
-          .setNegativeButton(
-              android.R.string.cancel,
-              (DialogInterface dialog, int which) -> resetSettingsMenuDialogCheckboxes())
-          .show();
-    } else {
-      // Without depth support, no settings are available.
-      new AlertDialog.Builder(this)
-          .setTitle(R.string.options_title_without_depth)
-          .setPositiveButton(
-              R.string.done,
-              (DialogInterface dialogInterface, int which) -> applySettingsMenuDialogCheckboxes())
-          .show();
-    }
-  }
-
-  private void applySettingsMenuDialogCheckboxes() {
-    depthSettings.setUseDepthForOcclusion(depthSettingsMenuDialogCheckboxes[0]);
-    depthSettings.setDepthColorVisualizationEnabled(depthSettingsMenuDialogCheckboxes[1]);
-    instantPlacementSettings.setInstantPlacementEnabled(
-        instantPlacementSettingsMenuDialogCheckboxes[0]);
-    configureSession();
-  }
-
-  private void resetSettingsMenuDialogCheckboxes() {
-    depthSettingsMenuDialogCheckboxes[0] = depthSettings.useDepthForOcclusion();
-    depthSettingsMenuDialogCheckboxes[1] = depthSettings.depthColorVisualizationEnabled();
-    instantPlacementSettingsMenuDialogCheckboxes[0] =
-        instantPlacementSettings.isInstantPlacementEnabled();
   }
 
   /** Checks if we detected at least one plane. */
